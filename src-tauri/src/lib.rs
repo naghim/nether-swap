@@ -61,7 +61,7 @@ fn detect_steam_path() -> Option<PathBuf> {
 fn detect_steam_path() -> Option<PathBuf> {
     if let Some(home) = std::env::var_os("HOME") {
         let home = PathBuf::from(home);
-        let p = home.join(".steam");
+        let p = home.join(".steam").join("steam");
         if p.exists() {
             return Some(p);
         }
