@@ -137,21 +137,28 @@ function App() {
   }, [screen]);
 
   // Load profiles when entering main screen
-  const loadProfiles = useCallback(async () => {
-    if (!userdataPath) return;
-    try {
-      const profs = await invoke<Profile[]>("get_profiles", { userdataPath });
-      setProfiles(profs);
-      setToast("Profiles refreshed");
-      setTimeout(() => setToast(null), 2000);
-    } catch {
-      /* ignore */
-    }
-  }, [userdataPath]);
+  const loadProfiles = useCallback(
+    async (manual: boolean) => {
+      if (!userdataPath) return;
+      try {
+        const profs = await invoke<Profile[]>("get_profiles", { userdataPath });
+        setProfiles(profs);
+
+        if (manual) {
+          setToast("Profiles refreshed");
+          setTimeout(() => setToast(null), 2000);
+        }
+      } catch {
+        setToast("Failed to load profiles");
+        setTimeout(() => setToast(null), 3000);
+      }
+    },
+    [userdataPath],
+  );
 
   useEffect(() => {
     if (screen === "main") {
-      loadProfiles();
+      loadProfiles(false);
     }
   }, [screen, loadProfiles]);
 
@@ -273,7 +280,7 @@ function App() {
       });
       setSwapResult(result);
       // Refresh profiles after swap
-      await loadProfiles();
+      await loadProfiles(false);
     } catch (e) {
       setSwapResult({ success: false, message: String(e), details: [] });
     } finally {
@@ -383,7 +390,7 @@ function App() {
         <div className="header-right">
           <button
             className="theme-toggle"
-            onClick={() => loadProfiles()}
+            onClick={() => loadProfiles(true)}
             title="Refresh profiles"
           >
             <RotateCcw size={14} />
