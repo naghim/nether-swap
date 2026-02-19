@@ -11,6 +11,7 @@ import {
   Moon,
   Folder,
   ArrowRightLeft,
+  ArrowRight,
   RotateCcw,
   Settings,
   Archive,
@@ -80,14 +81,19 @@ function App() {
   const [screen, setScreen] = useState<"setup" | "main">("setup");
   const [userdataPath, setUserdataPath] = useState("");
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [selectedSource, setSelectedSource] = useState<{ id: string; isBackup: boolean } | null>(null);
+  const [selectedSource, setSelectedSource] = useState<{
+    id: string;
+    isBackup: boolean;
+  } | null>(null);
   const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
   const [summary, setSummary] = useState<SwapSummary | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [swapping, setSwapping] = useState(false);
   const [swapResult, setSwapResult] = useState<SwapResult | null>(null);
   const [dotaRunning, setDotaRunning] = useState(false);
-  const [setupStatus, setSetupStatus] = useState<"searching" | "found" | "error" | "idle">("searching");
+  const [setupStatus, setSetupStatus] = useState<
+    "searching" | "found" | "error" | "idle"
+  >("searching");
   const [setupError, setSetupError] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const dotaCheckRef = useRef<ReturnType<typeof setInterval>>();
@@ -107,7 +113,9 @@ function App() {
         setScreen("main"); // Go straight to main screen
       } catch {
         setSetupStatus("error");
-        setSetupError("Could not auto-detect Steam. Please select the folder manually.");
+        setSetupError(
+          "Could not auto-detect Steam. Please select the folder manually.",
+        );
       }
     })();
   }, []);
@@ -173,24 +181,32 @@ function App() {
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [selectedSource, selectedTargets, userdataPath]);
 
   // ─── Handlers ───────────────────────────────────────────
 
   const handleManualSelect = async () => {
-    const selected = await openDialog({ directory: true, multiple: false, title: "Select Steam or userdata folder" });
+    const selected = await openDialog({
+      directory: true,
+      multiple: false,
+      title: "Select Steam or userdata folder",
+    });
     if (!selected) return;
-    
+
     const wasOnMainScreen = screen === "main";
-    
+
     try {
-      const state = await invoke<AppStateData>("validate_steam_path", { path: selected });
+      const state = await invoke<AppStateData>("validate_steam_path", {
+        path: selected,
+      });
       setUserdataPath(state.userdata_path);
       setSetupStatus("found");
       setSetupError("");
       setScreen("main");
-      
+
       if (wasOnMainScreen) {
         setToast("Steam path updated");
         setTimeout(() => setToast(null), 2000);
@@ -213,7 +229,10 @@ function App() {
     // Source must have dota2 data
     if (!profile.has_dota2) return;
     const key = { id: profile.id, isBackup: profile.is_backup };
-    if (selectedSource?.id === key.id && selectedSource?.isBackup === key.isBackup) {
+    if (
+      selectedSource?.id === key.id &&
+      selectedSource?.isBackup === key.isBackup
+    ) {
       setSelectedSource(null);
       setSelectedTargets([]); // Clear targets when deselecting source
     } else {
@@ -228,10 +247,17 @@ function App() {
     // Can't select backup as target
     if (profile.is_backup) return;
     // Can't select the same profile as source (unless it's a backup source)
-    if (selectedSource && !selectedSource.isBackup && profile.id === selectedSource.id) return;
+    if (
+      selectedSource &&
+      !selectedSource.isBackup &&
+      profile.id === selectedSource.id
+    )
+      return;
 
     setSelectedTargets((prev) =>
-      prev.includes(profile.id) ? prev.filter((id) => id !== profile.id) : [...prev, profile.id]
+      prev.includes(profile.id)
+        ? prev.filter((id) => id !== profile.id)
+        : [...prev, profile.id],
     );
   };
 
@@ -285,7 +311,10 @@ function App() {
             <h2>
               Nether <span>Swap</span>
             </h2>
-            <p>Dota 2 profile configuration manager. Swap your config between Steam accounts effortlessly.</p>
+            <p>
+              Dota 2 profile configuration manager. Swap your config between
+              Steam accounts effortlessly.
+            </p>
 
             {setupStatus === "searching" && (
               <div className="setup-status searching">
@@ -296,7 +325,9 @@ function App() {
             {setupStatus === "found" && (
               <div className="setup-status found">
                 Steam detected successfully!
-                <div className="setup-path">{normalize_display_path(userdataPath)}</div>
+                <div className="setup-path">
+                  {normalize_display_path(userdataPath)}
+                </div>
               </div>
             )}
 
@@ -310,8 +341,13 @@ function App() {
                   Continue
                 </button>
               )}
-              <button className="btn btn-secondary" onClick={handleManualSelect}>
-                {setupStatus === "found" ? "Choose Different Folder" : "Select Steam Folder"}
+              <button
+                className="btn btn-secondary"
+                onClick={handleManualSelect}
+              >
+                {setupStatus === "found"
+                  ? "Choose Different Folder"
+                  : "Select Steam Folder"}
               </button>
             </div>
           </div>
@@ -330,7 +366,10 @@ function App() {
           <h1>
             Nether <span>Swap</span>
           </h1>
-          <span className="steam-path-display" title={normalize_display_path(userdataPath)}>
+          <span
+            className="steam-path-display"
+            title={normalize_display_path(userdataPath)}
+          >
             {normalize_display_path(userdataPath)}
           </span>
           <button
@@ -349,7 +388,10 @@ function App() {
           >
             <RotateCcw size={14} />
           </button>
-          <button className="theme-toggle" onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}>
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+          >
             {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
           </button>
         </div>
@@ -359,7 +401,8 @@ function App() {
       {dotaRunning && (
         <div className="dota-warning">
           <AlertTriangle size={16} />
-          Dota 2 is currently running. Switching profiles while the game is open is not supported.
+          Dota 2 is currently running. Switching profiles while the game is open
+          is not supported.
         </div>
       )}
 
@@ -373,7 +416,9 @@ function App() {
           <div className="pane">
             <div className="pane-header">
               <span className="pane-title">Source</span>
-              <span className="pane-badge">{sourceProfiles.length} available</span>
+              <span className="pane-badge">
+                {sourceProfiles.length} available
+              </span>
             </div>
             <div className="pane-list">
               {sourceProfiles.length === 0 ? (
@@ -384,7 +429,8 @@ function App() {
               ) : (
                 sourceProfiles.map((profile) => {
                   const isSelected =
-                    selectedSource?.id === profile.id && selectedSource?.isBackup === profile.is_backup;
+                    selectedSource?.id === profile.id &&
+                    selectedSource?.isBackup === profile.is_backup;
                   return (
                     <div
                       key={`source-${profile.id}-${profile.is_backup}`}
@@ -392,7 +438,11 @@ function App() {
                       onClick={() => handleSourceSelect(profile)}
                     >
                       <div className="profile-avatar">
-                        {profile.is_backup ? <Archive size={16} /> : getInitials(profile.name)}
+                        {profile.is_backup ? (
+                          <Archive size={16} />
+                        ) : (
+                          getInitials(profile.name)
+                        )}
                       </div>
                       <div className="profile-info">
                         <div className="profile-name">{profile.name}</div>
@@ -422,7 +472,7 @@ function App() {
 
           {/* Arrow Indicator */}
           <div className="pane-arrow">
-            <ArrowRightLeft size={24} />
+            <ArrowRight size={24} />
           </div>
 
           {/* Target Pane */}
@@ -442,7 +492,9 @@ function App() {
               ) : (
                 targetProfiles.map((profile) => {
                   const isSelected = selectedTargets.includes(profile.id);
-                  const isSameAsSource = !selectedSource?.isBackup && selectedSource?.id === profile.id;
+                  const isSameAsSource =
+                    !selectedSource?.isBackup &&
+                    selectedSource?.id === profile.id;
                   const isDisabled = !selectedSource || isSameAsSource;
                   return (
                     <div
@@ -450,7 +502,9 @@ function App() {
                       className={`profile-card ${isSelected ? "selected" : ""} ${isDisabled ? "disabled" : ""}`}
                       onClick={() => !isDisabled && handleTargetToggle(profile)}
                     >
-                      <div className="profile-avatar">{getInitials(profile.name)}</div>
+                      <div className="profile-avatar">
+                        {getInitials(profile.name)}
+                      </div>
                       <div className="profile-info">
                         <div className="profile-name">{profile.name}</div>
                         <div className="profile-meta">
@@ -509,7 +563,9 @@ function App() {
                       >
                         <FolderOpen size={14} />
                       </button>
-                      {i < summary.targets.length - 1 && <span className="text-muted">, </span>}
+                      {i < summary.targets.length - 1 && (
+                        <span className="text-muted">, </span>
+                      )}
                     </span>
                   ))}
                 </div>
@@ -517,19 +573,27 @@ function App() {
                 <div className="summary-grid">
                   <div className="summary-stat">
                     <div className="summary-stat-label">Last Modified</div>
-                    <div className="summary-stat-value">{summary.source_last_modified}</div>
+                    <div className="summary-stat-value">
+                      {summary.source_last_modified}
+                    </div>
                   </div>
                   <div className="summary-stat">
                     <div className="summary-stat-label">Total Size</div>
-                    <div className="summary-stat-value">{formatBytes(summary.source_total_size)}</div>
+                    <div className="summary-stat-value">
+                      {formatBytes(summary.source_total_size)}
+                    </div>
                   </div>
                   <div className="summary-stat">
                     <div className="summary-stat-label">Files</div>
-                    <div className="summary-stat-value">{summary.source_file_count}</div>
+                    <div className="summary-stat-value">
+                      {summary.source_file_count}
+                    </div>
                   </div>
                   <div className="summary-stat">
                     <div className="summary-stat-label">Folders</div>
-                    <div className="summary-stat-value">{summary.source_folder_count}</div>
+                    <div className="summary-stat-value">
+                      {summary.source_folder_count}
+                    </div>
                   </div>
                 </div>
 
@@ -545,7 +609,9 @@ function App() {
                     </>
                   ) : (
                     <>
-                      <ArrowRightLeft size={14} /> Swap Configuration ({summary.targets.length} target{summary.targets.length > 1 ? "s" : ""})
+                      <ArrowRightLeft size={14} /> Swap Configuration (
+                      {summary.targets.length} target
+                      {summary.targets.length > 1 ? "s" : ""})
                     </>
                   )}
                 </button>
@@ -559,8 +625,14 @@ function App() {
       {swapResult && (
         <div className="overlay" onClick={handleCloseResult}>
           <div className="result-card" onClick={(e) => e.stopPropagation()}>
-            <div className={`result-icon ${swapResult.success ? "success" : "error"}`}>
-              {swapResult.success ? <CheckCircle2 size={32} /> : <XCircle size={32} />}
+            <div
+              className={`result-icon ${swapResult.success ? "success" : "error"}`}
+            >
+              {swapResult.success ? (
+                <CheckCircle2 size={32} />
+              ) : (
+                <XCircle size={32} />
+              )}
             </div>
             <h3>{swapResult.success ? "Swap Complete!" : "Swap Failed"}</h3>
             <p>{swapResult.message}</p>
@@ -571,7 +643,11 @@ function App() {
                   <div
                     key={i}
                     className={`result-detail-item ${
-                      d.startsWith("Error:") ? "error-item" : d.startsWith("Warning:") ? "warning-item" : "success-item"
+                      d.startsWith("Error:")
+                        ? "error-item"
+                        : d.startsWith("Warning:")
+                          ? "warning-item"
+                          : "success-item"
                     }`}
                   >
                     {d}
