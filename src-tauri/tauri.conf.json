@@ -11,7 +11,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI3NDRGRURGRjIyMjQ1M0YKUldRL1JTTHkzLzVFdDlWV29Pem1zTXpkWXoyby9OdklDMi9ZOFQ4M1VVSSt3eGVpTE9MNWM0Y3YK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgzMDNDNzMwNjEzQkIzQUEKUldTcXN6dGhNTWNEZytkUVZQN1BrUTQrb0FNMUxZNjAzOXY1aHh1MHRYWjR5enowTDBza0hMRU8K",
       "endpoints": [
         "https://github.com/naghim/nether-swap/releases/latest/download/latest.json"
       ]
