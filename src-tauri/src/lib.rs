@@ -132,9 +132,7 @@ fn get_persona_name(userdata_path: &Path, user_id: &str) -> String {
 
 fn normalize_path(path: &Path) -> String {
     // Convert to string and normalize slashes to forward slashes
-    path.to_string_lossy()
-        .replace('\\', "/")
-        .to_string()
+    path.to_string_lossy().replace('\\', "/").to_string()
 }
 
 // ─── Profile discovery ──────────────────────────────────────────────
@@ -504,8 +502,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
         fs::create_dir_all(dst).map_err(|e| format!("Failed to create dir {:?}: {}", dst, e))?;
     }
 
-    let entries =
-        fs::read_dir(src).map_err(|e| format!("Failed to read dir {:?}: {}", src, e))?;
+    let entries = fs::read_dir(src).map_err(|e| format!("Failed to read dir {:?}: {}", src, e))?;
 
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
@@ -542,6 +539,7 @@ fn check_dota2_running() -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
