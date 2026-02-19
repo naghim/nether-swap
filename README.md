@@ -12,11 +12,11 @@
 
 Pre-built binaries are available on the [GitHub Releases](https://github.com/naghim/nether-swap/releases) page for:
 
-| Platform    | Notes                            |
-| ----------- | -------------------------------- |
-| **Windows** | x86-64 installer                 |
-| **Linux**   | Ubuntu 24.04 (`.deb` / AppImage) |
-| **macOS**   | Apple Silicon (M series)         |
+| Platform    | Notes                      |
+| ----------- | -------------------------- |
+| **Windows** | x86-64 installer           |
+| **Linux**   | `.deb` / `.rpm` / AppImage |
+| **macOS**   | Apple Silicon `.dmg`       |
 
 Download the appropriate binary for your platform, install it, and you're ready to go — no additional runtime or dependencies required.
 
