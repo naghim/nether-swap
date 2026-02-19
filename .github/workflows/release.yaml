@@ -57,5 +57,5 @@ jobs:
           releaseBody: "See [README.md](https://github.com/naghim/nether-swap/blob/master/README.md) for more details."
           releaseDraft: true
           prerelease: false
-          releaseAssetNamePattern: "nether-swap-[version]-[platform]-[arch][ext]"
+          assetNamePattern: "nether-swap-[version]-[platform]-[arch][ext]"
           args: ${{ matrix.args }}
