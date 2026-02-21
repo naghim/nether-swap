@@ -1,6 +1,10 @@
+use new_vdf_parser::appinfo_vdf_parser::open_appinfo_vdf;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::SystemTime;
 use sysinfo::System;
 use walkdir::WalkDir;
@@ -11,9 +15,16 @@ use walkdir::WalkDir;
 pub struct Profile {
     pub id: String,
     pub name: String,
-    pub has_dota2: bool,
+    pub game_count: usize,
     pub is_backup: bool,
     pub path: String,
+    pub last_login: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameInfo {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +49,21 @@ pub struct AppState {
     pub userdata_path: String,
     pub steam_path: String,
 }
+
+// ─── AppInfo cache ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+struct CachedGameEntry {
+    name: String,
+    executables: Vec<String>,
+}
+
+struct AppInfoCache {
+    last_modified: Option<SystemTime>,
+    games: HashMap<String, CachedGameEntry>,
+}
+
+static APP_INFO_CACHE: Mutex<Option<AppInfoCache>> = Mutex::new(None);
 
 // ─── Steam path detection ───────────────────────────────────────────
 
@@ -135,10 +161,211 @@ fn normalize_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/").to_string()
 }
 
+// ─── Steam library discovery ────────────────────────────────────────
+
+fn find_all_steamapps_dirs(steam_path: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let main_steamapps = steam_path.join("steamapps");
+    if main_steamapps.exists() {
+        dirs.push(main_steamapps.clone());
+    }
+
+    // Parse libraryfolders.vdf to find additional library paths
+    let library_file = main_steamapps.join("libraryfolders.vdf");
+    if library_file.exists() {
+        if let Ok(content) = fs::read_to_string(&library_file) {
+            let re = regex::Regex::new(r#""path"\s+"([^"]+)""#).unwrap();
+            for captures in re.captures_iter(&content) {
+                if let Some(path_match) = captures.get(1) {
+                    let raw = path_match.as_str().replace("\\\\", "\\");
+                    let lib_path = PathBuf::from(&raw);
+                    let lib_steamapps = lib_path.join("steamapps");
+                    if lib_steamapps.exists() && !dirs.iter().any(|d| d == &lib_steamapps) {
+                        dirs.push(lib_steamapps);
+                    }
+                }
+            }
+        }
+    }
+
+    dirs
+}
+
+fn get_appinfo_games(steam_path: &Path) -> HashMap<String, CachedGameEntry> {
+    let appinfo_path = steam_path.join("appcache").join("appinfo.vdf");
+    if !appinfo_path.exists() {
+        return HashMap::new();
+    }
+
+    let current_modified = fs::metadata(&appinfo_path)
+        .ok()
+        .and_then(|m| m.modified().ok());
+
+    // Check cache validity
+    {
+        let cache = APP_INFO_CACHE.lock().unwrap();
+        if let Some(ref c) = *cache {
+            let cache_valid = match (&c.last_modified, &current_modified) {
+                (Some(cached), Some(current)) => cached == current,
+                _ => false,
+            };
+            if cache_valid {
+                return c.games.clone();
+            }
+        }
+    }
+
+    // Parse the VDF file
+    let appinfo_vdf: Map<String, Value> = open_appinfo_vdf(&appinfo_path, Some(true));
+
+    let mut games = HashMap::new();
+
+    if let Some(Value::Array(entries)) = appinfo_vdf.get("entries") {
+        for entry in entries {
+            let appid = match entry.get("appid") {
+                Some(Value::Number(n)) => n.to_string(),
+                _ => continue,
+            };
+
+            let name = entry
+                .get("common")
+                .and_then(|c| c.get("name"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if name.is_empty() {
+                continue;
+            }
+
+            let mut executables = Vec::new();
+            if let Some(launch) = entry.get("config").and_then(|c| c.get("launch")) {
+                if let Some(launch_map) = launch.as_object() {
+                    for (_, launch_config) in launch_map {
+                        if let Some(exe_path) =
+                            launch_config.get("executable").and_then(|e| e.as_str())
+                        {
+                            let normalized = exe_path.replace('\\', "/");
+                            if let Some(filename) = normalized.rsplit('/').next() {
+                                let filename = filename.to_string();
+                                if !filename.is_empty() && !executables.contains(&filename) {
+                                    executables.push(filename);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            games.insert(appid, CachedGameEntry { name, executables });
+        }
+    }
+
+    // Update cache
+    {
+        let mut cache = APP_INFO_CACHE.lock().unwrap();
+        *cache = Some(AppInfoCache {
+            last_modified: current_modified,
+            games: games.clone(),
+        });
+    }
+
+    games
+}
+
+fn get_game_name_from_manifest(steamapps_dirs: &[PathBuf], game_id: &str) -> Option<String> {
+    let manifest_name = format!("appmanifest_{}.acf", game_id);
+    for dir in steamapps_dirs {
+        let manifest_path = dir.join(&manifest_name);
+        if manifest_path.exists() {
+            if let Ok(content) = fs::read_to_string(&manifest_path) {
+                let re = regex::Regex::new(r#""name"\s+"([^"]+)""#).unwrap();
+                if let Some(captures) = re.captures(&content) {
+                    if let Some(name) = captures.get(1) {
+                        let name_str = name.as_str().trim();
+                        if !name_str.is_empty() {
+                            return Some(name_str.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn get_game_info(
+    appinfo_games: &HashMap<String, CachedGameEntry>,
+    steamapps_dirs: &[PathBuf],
+    game_id: &str,
+) -> Option<(String, Vec<String>)> {
+    // Try appinfo.vdf cache first
+    if let Some(entry) = appinfo_games.get(game_id) {
+        return Some((entry.name.clone(), entry.executables.clone()));
+    }
+
+    // Fall back to appmanifest files
+    if let Some(name) = get_game_name_from_manifest(steamapps_dirs, game_id) {
+        return Some((name, vec![]));
+    }
+
+    None
+}
+
+fn has_meaningful_game_data(game_path: &Path) -> bool {
+    let entries = match fs::read_dir(game_path) {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.eq_ignore_ascii_case("remotecache.vdf") && path.is_file() {
+                continue;
+            }
+        }
+        return true;
+    }
+
+    false
+}
+
+fn count_profile_games(
+    profile_path: &Path,
+    appinfo_games: &HashMap<String, CachedGameEntry>,
+    steamapps_dirs: &[PathBuf],
+) -> usize {
+    let mut count = 0;
+    if let Ok(entries) = fs::read_dir(profile_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let folder_name = match path.file_name() {
+                Some(n) => n.to_string_lossy().to_string(),
+                None => continue,
+            };
+            if !folder_name.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            if !has_meaningful_game_data(&path) {
+                continue;
+            }
+            if get_game_info(appinfo_games, steamapps_dirs, &folder_name).is_some() {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 // ─── Profile discovery ──────────────────────────────────────────────
 
-fn discover_profiles(userdata_path: &Path) -> Vec<Profile> {
+fn discover_profiles(userdata_path: &Path, steam_path: &Path, steamapps_dirs: &[PathBuf]) -> Vec<Profile> {
     let mut profiles = Vec::new();
+    let appinfo_games = get_appinfo_games(steam_path);
 
     if !userdata_path.exists() {
         return profiles;
@@ -176,15 +403,27 @@ fn discover_profiles(userdata_path: &Path) -> Vec<Profile> {
             continue;
         }
 
-        let has_dota2 = path.join("570").exists();
+        let game_count = count_profile_games(&path, &appinfo_games, steamapps_dirs);
         let name = get_persona_name(userdata_path, &folder_name);
+        
+        // Get last login time from localconfig.vdf modification date
+        let last_login = path
+            .join("config")
+            .join("localconfig.vdf")
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
 
         profiles.push(Profile {
             id: folder_name,
             name,
-            has_dota2,
+            game_count,
             is_backup: false,
             path: normalize_path(&path),
+            last_login: format_timestamp(last_login),
         });
     }
 
@@ -202,8 +441,7 @@ fn discover_profiles(userdata_path: &Path) -> Vec<Profile> {
                     None => continue,
                 };
 
-                let has_dota2_content = path.join("570").exists()
-                    || fs::read_dir(&path).map(|e| e.count() > 0).unwrap_or(false);
+                let game_count = count_profile_games(&path, &appinfo_games, steamapps_dirs);
 
                 let name = get_persona_name(userdata_path, &folder_name);
                 let display_name = if name == folder_name {
@@ -211,21 +449,72 @@ fn discover_profiles(userdata_path: &Path) -> Vec<Profile> {
                 } else {
                     format!("Backup - {}", name)
                 };
+                
+                // For backups, get the latest modification time from any file in the backup folder
+                let last_login = get_latest_modified_time(&path);
 
-                if has_dota2_content {
+                if game_count > 0 {
                     profiles.push(Profile {
                         id: folder_name,
                         name: display_name,
-                        has_dota2: true,
+                        game_count,
                         is_backup: true,
                         path: normalize_path(&path),
+                        last_login: format_timestamp(last_login),
                     });
                 }
             }
         }
     }
 
+    // Sort profiles: regular profiles first, then backups, each sorted by last login (most recent first)
+    profiles.sort_by(|a, b| {
+        // First compare by backup status (false < true, so regular profiles come first)
+        match a.is_backup.cmp(&b.is_backup) {
+            std::cmp::Ordering::Equal => {
+                // Within the same group, sort by last login (most recent first)
+                b.last_login.cmp(&a.last_login)
+            }
+            other => other,
+        }
+    });
+
     profiles
+}
+
+// ─── Timestamp formatting ───────────────────────────────────────────
+
+fn format_timestamp(secs: u64) -> String {
+    use chrono::{DateTime, Utc};
+    if secs == 0 {
+        return "Never".to_string();
+    }
+    let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0)
+        .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).unwrap());
+    dt.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+fn get_latest_modified_time(dir: &Path) -> u64 {
+    let mut latest: Option<SystemTime> = None;
+    
+    for entry in WalkDir::new(dir).into_iter().flatten() {
+        if entry.path().is_file() {
+            if let Ok(metadata) = fs::metadata(entry.path()) {
+                if let Ok(modified) = metadata.modified() {
+                    latest = Some(match latest {
+                        Some(current) if modified > current => modified,
+                        Some(current) => current,
+                        None => modified,
+                    });
+                }
+            }
+        }
+    }
+    
+    latest
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 // ─── File stats ─────────────────────────────────────────────────────
@@ -324,19 +613,73 @@ fn validate_steam_path(path: String) -> Result<AppState, String> {
 }
 
 #[tauri::command]
-fn get_profiles(userdata_path: String) -> Vec<Profile> {
-    discover_profiles(Path::new(&userdata_path))
+fn get_profiles(userdata_path: String, steam_path: String) -> Vec<Profile> {
+    let steam = Path::new(&steam_path);
+    let steamapps_dirs = find_all_steamapps_dirs(steam);
+    discover_profiles(Path::new(&userdata_path), steam, &steamapps_dirs)
+}
+
+#[tauri::command]
+fn get_games_for_profile(
+    steam_path: String,
+    userdata_path: String,
+    profile_id: String,
+    is_backup: bool,
+) -> Vec<GameInfo> {
+    let ud = PathBuf::from(&userdata_path);
+    let steam = Path::new(&steam_path);
+    let steamapps_dirs = find_all_steamapps_dirs(steam);
+    let appinfo_games = get_appinfo_games(steam);
+
+    let profile_path = if is_backup {
+        ud.join("dunabackups").join(&profile_id)
+    } else {
+        ud.join(&profile_id)
+    };
+
+    let mut games = Vec::new();
+    if let Ok(entries) = fs::read_dir(&profile_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let folder_name = match path.file_name() {
+                Some(n) => n.to_string_lossy().to_string(),
+                None => continue,
+            };
+            if !folder_name.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            if !has_meaningful_game_data(&path) {
+                continue;
+            }
+            if let Some((name, _)) = get_game_info(&appinfo_games, &steamapps_dirs, &folder_name) {
+                games.push(GameInfo {
+                    id: folder_name,
+                    name,
+                });
+            }
+        }
+    }
+
+    games.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    games
 }
 
 #[tauri::command]
 fn get_swap_summary(
     userdata_path: String,
+    steam_path: String,
     source_id: String,
     source_is_backup: bool,
     target_ids: Vec<String>,
+    game_ids: Vec<String>,
 ) -> Result<SwapSummary, String> {
     let ud = PathBuf::from(&userdata_path);
-    let profiles = discover_profiles(&ud);
+    let steam = Path::new(&steam_path);
+    let steamapps_dirs = find_all_steamapps_dirs(steam);
+    let profiles = discover_profiles(&ud, steam, &steamapps_dirs);
 
     let source = profiles
         .iter()
@@ -354,21 +697,37 @@ fn get_swap_summary(
         return Err("No valid target profiles found".to_string());
     }
 
-    let source_dota_path = if source.is_backup {
-        ud.join("dunabackups").join(&source.id).join("570")
-    } else {
-        ud.join(&source.id).join("570")
-    };
+    if game_ids.is_empty() {
+        return Err("No games selected".to_string());
+    }
 
-    let actual_source = if source_dota_path.exists() {
-        source_dota_path
-    } else if source.is_backup {
+    let source_base = if source.is_backup {
         ud.join("dunabackups").join(&source.id)
     } else {
-        return Err("Source has no Dota 2 data".to_string());
+        ud.join(&source.id)
     };
 
-    let (total_size, file_count, folder_count, latest_modified) = get_dir_stats(&actual_source);
+    let mut total_size: u64 = 0;
+    let mut file_count: usize = 0;
+    let mut folder_count: usize = 0;
+    let mut latest_modified: Option<SystemTime> = None;
+
+    for game_id in &game_ids {
+        let game_path = source_base.join(game_id);
+        if game_path.exists() {
+            let (size, files, folders, modified) = get_dir_stats(&game_path);
+            total_size += size;
+            file_count += files;
+            folder_count += folders;
+            if let Some(mod_time) = modified {
+                latest_modified = Some(match latest_modified {
+                    Some(current) if mod_time > current => mod_time,
+                    Some(current) => current,
+                    None => mod_time,
+                });
+            }
+        }
+    }
 
     let last_modified_str = latest_modified
         .map(format_system_time)
@@ -390,25 +749,23 @@ fn execute_swap(
     source_id: String,
     source_is_backup: bool,
     target_ids: Vec<String>,
+    game_ids: Vec<String>,
 ) -> SwapResult {
     let ud = PathBuf::from(&userdata_path);
     let mut details = Vec::new();
 
-    let source_570 = if source_is_backup {
-        let p = ud.join("dunabackups").join(&source_id).join("570");
-        if p.exists() {
-            p
-        } else {
-            ud.join("dunabackups").join(&source_id)
-        }
+    let source_base = if source_is_backup {
+        ud.join("dunabackups").join(&source_id)
     } else {
-        ud.join(&source_id).join("570")
+        ud.join(&source_id)
     };
 
-    if !source_570.exists() {
+    // Verify at least one source game folder exists
+    let has_any_source = game_ids.iter().any(|gid| source_base.join(gid).exists());
+    if !has_any_source {
         return SwapResult {
             success: false,
-            message: "Source Dota 2 data not found".to_string(),
+            message: "Source game data not found".to_string(),
             details: vec![],
         };
     }
@@ -423,63 +780,85 @@ fn execute_swap(
     }
 
     for target_id in &target_ids {
-        let target_570 = ud.join(target_id).join("570");
-
-        // Step 1: Backup existing target data if 570 exists
-        if target_570.exists() {
-            let backup_target = backups_dir.join(target_id);
-            if backup_target.exists() {
-                if let Err(e) = fs::remove_dir_all(&backup_target) {
-                    details.push(format!(
-                        "Warning: Failed to remove old backup for {}: {}",
-                        target_id, e
-                    ));
-                }
-            }
-
-            let backup_570 = backup_target.join("570");
-            if let Err(e) = fs::create_dir_all(&backup_570) {
+        for game_id in &game_ids {
+            let source_game = source_base.join(game_id);
+            if !source_game.exists() {
                 details.push(format!(
-                    "Warning: Failed to create backup dir for {}: {}",
-                    target_id, e
+                    "Warning: Source has no data for game {} — skipped for target {}",
+                    game_id, target_id
                 ));
                 continue;
             }
 
-            match copy_dir_recursive(&target_570, &backup_570) {
-                Ok(_) => details.push(format!("Backed up profile {} to dunabackups", target_id)),
-                Err(e) => {
-                    details.push(format!("Warning: Backup failed for {}: {}", target_id, e));
+            let target_game = ud.join(target_id).join(game_id);
+
+            // Step 1: Backup existing target game data
+            if target_game.exists() {
+                let backup_game = backups_dir.join(target_id).join(game_id);
+                if backup_game.exists() {
+                    if let Err(e) = fs::remove_dir_all(&backup_game) {
+                        details.push(format!(
+                            "Warning: Failed to remove old backup for {}/{}: {}",
+                            target_id, game_id, e
+                        ));
+                    }
+                }
+
+                if let Err(e) = fs::create_dir_all(&backup_game) {
+                    details.push(format!(
+                        "Warning: Failed to create backup dir for {}/{}: {}",
+                        target_id, game_id, e
+                    ));
+                    continue;
+                }
+
+                match copy_dir_recursive(&target_game, &backup_game) {
+                    Ok(_) => details.push(format!(
+                        "Backed up game {} for profile {} to dunabackups",
+                        game_id, target_id
+                    )),
+                    Err(e) => {
+                        details.push(format!(
+                            "Warning: Backup failed for {}/{}: {}",
+                            target_id, game_id, e
+                        ));
+                        continue;
+                    }
+                }
+            }
+
+            // Step 2: Delete target game folder
+            if target_game.exists() {
+                if let Err(e) = fs::remove_dir_all(&target_game) {
+                    details.push(format!(
+                        "Error: Failed to clear target {}/{}: {}",
+                        target_id, game_id, e
+                    ));
                     continue;
                 }
             }
-        }
 
-        // Step 2: Delete target 570 contents
-        if target_570.exists() {
-            if let Err(e) = fs::remove_dir_all(&target_570) {
+            // Step 3: Copy source game folder to target
+            if let Err(e) = fs::create_dir_all(&target_game) {
                 details.push(format!(
-                    "Error: Failed to clear target {} 570 folder: {}",
-                    target_id, e
+                    "Error: Failed to create target dir for {}/{}: {}",
+                    target_id, game_id, e
                 ));
                 continue;
             }
-        }
 
-        // Step 3: Create target 570 dir and copy source into it
-        if let Err(e) = fs::create_dir_all(&target_570) {
-            details.push(format!(
-                "Error: Failed to create target 570 dir for {}: {}",
-                target_id, e
-            ));
-            continue;
-        }
-
-        match copy_dir_recursive(&source_570, &target_570) {
-            Ok(_) => details.push(format!("Successfully swapped profile {}", target_id)),
-            Err(e) => {
-                details.push(format!("Error: Failed to copy to {}: {}", target_id, e));
-                continue;
+            match copy_dir_recursive(&source_game, &target_game) {
+                Ok(_) => details.push(format!(
+                    "Successfully swapped game {} for profile {}",
+                    game_id, target_id
+                )),
+                Err(e) => {
+                    details.push(format!(
+                        "Error: Failed to copy game {} to {}: {}",
+                        game_id, target_id, e
+                    ));
+                    continue;
+                }
             }
         }
     }
@@ -489,7 +868,7 @@ fn execute_swap(
     SwapResult {
         success: all_success,
         message: if all_success {
-            "All profiles swapped successfully!".to_string()
+            "All games swapped successfully!".to_string()
         } else {
             "Some operations failed. Check details.".to_string()
         },
@@ -521,19 +900,33 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn check_dota2_running() -> bool {
+fn check_games_running(steam_path: String, game_ids: Vec<String>) -> bool {
+    if game_ids.is_empty() {
+        return false;
+    }
+
+    let appinfo_games = get_appinfo_games(Path::new(&steam_path));
+
+    let mut exe_names: Vec<String> = Vec::new();
+    for game_id in &game_ids {
+        if let Some(info) = appinfo_games.get(game_id) {
+            exe_names.extend(info.executables.iter().cloned());
+        }
+    }
+
+    if exe_names.is_empty() {
+        return false;
+    }
+
     let mut sys = System::new();
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
-    let dota_name = if cfg!(target_os = "windows") {
-        "dota2.exe"
-    } else {
-        "dota2"
-    };
-
     sys.processes()
         .values()
-        .any(|p| p.name().to_string_lossy().eq_ignore_ascii_case(dota_name))
+        .any(|p| {
+            let pname = p.name().to_string_lossy();
+            exe_names.iter().any(|exe| pname.eq_ignore_ascii_case(exe))
+        })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -542,13 +935,15 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            detect_steam,
+            detect_steam,   
             validate_steam_path,
             get_profiles,
+            get_games_for_profile,
             get_swap_summary,
             execute_swap,
-            check_dota2_running,
+            check_games_running,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

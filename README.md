@@ -1,6 +1,6 @@
 # Nether Swap
 
-**Nether Swap** is a Dota 2 helper application that lets you effortlessly swap Dota 2 hotkeys and configuration between Steam profiles.
+**Nether Swap** is a Steam helper application that lets you effortlessly swap game configuration (hotkeys, settings, and more) between Steam profiles.
 
 <p align="center">
   <img src="images/application.webp" alt="Nether Swap" />
@@ -25,11 +25,11 @@ Download the appropriate binary for your platform, install it, and you're ready 
 ## Features
 
 - **Auto-detects Steam** — Nether Swap automatically finds your Steam installation on Windows, Linux, and macOS. You can also point it to a custom path manually.
-- **Profile discovery** — Lists all Steam accounts present in the `userdata` directory, showing which ones have Dota 2 configuration data.
-- **One-to-many swapping** — Select a source profile and push its Dota 2 config to one or more target profiles at once.
-- **Automatic backups** — Before overwriting any profile, the existing Dota 2 config is safely backed up to a `dunabackups` folder. Backed-up profiles also appear as sources so you can restore them later.
+- **Profile discovery** — Lists all Steam accounts present in the `userdata` directory, showing which ones have game configuration data.
+- **Multi-game support** — Browse and select which games' configuration data to swap, with game names automatically resolved from Steam's app manifests.
+- **One-to-many swapping** — Select a source profile and push game configs to one or more target profiles at once.
+- **Automatic backups** — Before overwriting any profile, the existing game config is safely backed up to a `dunabackups` folder. Backed-up profiles also appear as sources so you can restore them later.
 - **Swap preview** — See a summary (file count, folder count, total size, and last modified time) before committing to a swap.
-- **Dota 2 process guard** — Warns you if Dota 2 is currently running, helping you avoid config conflicts.
 - **Dark & light theme** — Choose the look that suits you.
 - **Cross-platform** — Runs natively on Windows, Linux, and macOS.
 
@@ -37,13 +37,15 @@ Download the appropriate binary for your platform, install it, and you're ready 
 
 ## How It Works
 
-Nether Swap reads Steam's `userdata` directory, which contains one folder per Steam account. Each account folder may contain a `570` subdirectory — that is Dota 2's configuration data (hotkeys, settings, and more).
+Nether Swap reads Steam's `userdata` directory, which contains one folder per Steam account. Each account folder may contain numbered subdirectories corresponding to game IDs — these hold game-specific configuration data (hotkeys, settings, and more).
+
+Games are identified by matching folders against Steam's `appmanifest_<id>.acf` files in all configured Steam library directories, ensuring only installed games with recognized names appear in the selection list.
 
 When you perform a swap:
 
-1. The target profile's existing `570` folder is **backed up** to `userdata/dunabackups/<account_id>/570`.
-2. The target's `570` folder is replaced with an exact copy of the source profile's `570` folder.
-3. You can swap the same source config to multiple target profiles simultaneously.
+1. You select a **source profile**, pick the **games** you want to copy, and choose one or more **target profiles**.
+2. Each target profile's existing game folders are **backed up** to `userdata/dunabackups/<account_id>/<game_id>`.
+3. The target's game folders are replaced with an exact copy from the source profile.
 
 Backups are non-destructive and show up in the profile list so you can always revert.
 

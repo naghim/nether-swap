@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { Store } from "@tauri-apps/plugin-store";
 import {
   Check,
   AlertTriangle,
@@ -16,6 +17,7 @@ import {
   Settings,
   Archive,
   FolderOpen,
+  Search,
 } from "lucide-react";
 import "./App.css";
 
@@ -24,9 +26,15 @@ import "./App.css";
 interface Profile {
   id: string;
   name: string;
-  has_dota2: boolean;
+  game_count: number;
   is_backup: boolean;
   path: string;
+  last_login: string;
+}
+
+interface GameInfo {
+  id: string;
+  name: string;
 }
 
 interface AppStateData {
@@ -47,6 +55,12 @@ interface SwapResult {
   success: boolean;
   message: string;
   details: string[];
+}
+
+interface SwapConfiguration {
+  source: { id: string; isBackup: boolean };
+  games: string[];
+  targets: string[];
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -80,23 +94,38 @@ function App() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [screen, setScreen] = useState<"setup" | "main">("setup");
   const [userdataPath, setUserdataPath] = useState("");
+  const [steamPath, setSteamPath] = useState("");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [selectedSource, setSelectedSource] = useState<{
     id: string;
     isBackup: boolean;
   } | null>(null);
+  const [games, setGames] = useState<GameInfo[]>([]);
+  const [selectedGames, setSelectedGames] = useState<string[]>([]);
   const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
   const [summary, setSummary] = useState<SwapSummary | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [swapping, setSwapping] = useState(false);
   const [swapResult, setSwapResult] = useState<SwapResult | null>(null);
-  const [dotaRunning, setDotaRunning] = useState(false);
+  const [gamesRunning, setGamesRunning] = useState(false);
   const [setupStatus, setSetupStatus] = useState<
     "searching" | "found" | "error" | "idle"
   >("searching");
   const [setupError, setSetupError] = useState("");
   const [toast, setToast] = useState<string | null>(null);
-  const dotaCheckRef = useRef<ReturnType<typeof setInterval>>();
+  const [loadedConfig, setLoadedConfig] = useState(false);
+  const [gameFilter, setGameFilter] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("");
+  const [targetFilter, setTargetFilter] = useState("");
+  const gameCheckRef = useRef<ReturnType<typeof setInterval>>();
+  const storeRef = useRef<Store | null>(null);
+
+  // Initialize store
+  useEffect(() => {
+    (async () => {
+      storeRef.current = await Store.load("settings.json");
+    })();
+  }, []);
 
   // Theme effect
   useEffect(() => {
@@ -109,6 +138,7 @@ function App() {
       try {
         const state = await invoke<AppStateData>("detect_steam");
         setUserdataPath(state.userdata_path);
+        setSteamPath(state.steam_path);
         setSetupStatus("found");
         setScreen("main"); // Go straight to main screen
       } catch {
@@ -120,28 +150,31 @@ function App() {
     })();
   }, []);
 
-  // Dota 2 process check
+  // Game process check
   useEffect(() => {
     if (screen !== "main") return;
     const check = async () => {
       try {
-        const running = await invoke<boolean>("check_dota2_running");
-        setDotaRunning(running);
+        const running = await invoke<boolean>("check_games_running", {
+          steamPath,
+          gameIds: selectedGames,
+        });
+        setGamesRunning(running);
       } catch {
         /* ignore */
       }
     };
     check();
-    dotaCheckRef.current = setInterval(check, 5000);
-    return () => clearInterval(dotaCheckRef.current);
-  }, [screen]);
+    gameCheckRef.current = setInterval(check, 5000);
+    return () => clearInterval(gameCheckRef.current);
+  }, [screen, steamPath, selectedGames]);
 
   // Load profiles when entering main screen
   const loadProfiles = useCallback(
     async (manual: boolean) => {
-      if (!userdataPath) return;
+      if (!userdataPath || !steamPath) return;
       try {
-        const profs = await invoke<Profile[]>("get_profiles", { userdataPath });
+        const profs = await invoke<Profile[]>("get_profiles", { userdataPath, steamPath });
         setProfiles(profs);
 
         if (manual) {
@@ -153,7 +186,7 @@ function App() {
         setTimeout(() => setToast(null), 3000);
       }
     },
-    [userdataPath],
+    [userdataPath, steamPath],
   );
 
   useEffect(() => {
@@ -162,9 +195,36 @@ function App() {
     }
   }, [screen, loadProfiles]);
 
+  // Load games when source changes
+  useEffect(() => {
+    if (!selectedSource || !steamPath || !userdataPath) {
+      setGames([]);
+      setSelectedGames([]);
+      return;
+    }
+
+    (async () => {
+      try {
+        const g = await invoke<GameInfo[]>("get_games_for_profile", {
+          steamPath,
+          userdataPath,
+          profileId: selectedSource.id,
+          isBackup: selectedSource.isBackup,
+        });
+        setGames(g);
+      } catch {
+        setGames([]);
+      }
+    })();
+  }, [selectedSource, steamPath, userdataPath]);
+
   // Load summary when selection changes
   useEffect(() => {
-    if (!selectedSource || selectedTargets.length === 0) {
+    if (
+      !selectedSource ||
+      selectedTargets.length === 0 ||
+      selectedGames.length === 0
+    ) {
       setSummary(null);
       return;
     }
@@ -176,9 +236,11 @@ function App() {
       try {
         const s = await invoke<SwapSummary>("get_swap_summary", {
           userdataPath,
+          steamPath,
           sourceId: selectedSource.id,
           sourceIsBackup: selectedSource.isBackup,
           targetIds: selectedTargets,
+          gameIds: selectedGames,
         });
         if (!cancelled) setSummary(s);
       } catch {
@@ -191,7 +253,63 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedSource, selectedTargets, userdataPath]);
+  }, [selectedSource, selectedTargets, selectedGames, userdataPath, steamPath]);
+
+  useEffect(() => {
+    async function restoreConfig() {
+      if (!storeRef.current) return;
+      if (profiles.length === 0) return; // Wait until profiles are loaded
+      if (loadedConfig) return; // Only attempt to load config once
+      const config = await storeRef.current.get<SwapConfiguration>("swapConfiguration");
+
+      console.log("Restoring config:", config);
+
+      // Restore source if it exists
+      if (!config?.source) {
+        return;
+      }
+      const sourceExists = profiles.some(
+        (p) => p.id === config.source.id && p.is_backup === config.source.isBackup
+      );
+      if (sourceExists) {
+        setSelectedSource(config.source);
+
+        // Wait for games to load, then restore game selection
+        if (config.games && config.games.length > 0) {
+          try {
+            const availableGames = await invoke<GameInfo[]>("get_games_for_profile", {
+              steamPath,
+              userdataPath,
+              profileId: config.source.id,
+              isBackup: config.source.isBackup,
+            });
+            const gameIds = availableGames.map((g) => g.id);
+            const validGames = config.games.filter((gid) => gameIds.includes(gid));
+            if (validGames.length > 0) {
+              setSelectedGames(validGames);
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+
+        // Restore targets if they exist
+        if (config.targets && config.targets.length > 0) {
+          const validTargets = config.targets.filter((tid) =>
+            profiles.some((p) => p.id === tid && !p.is_backup)
+          );
+          if (validTargets.length > 0) {
+            setSelectedTargets(validTargets);
+          }
+        }
+
+      }
+
+      setLoadedConfig(true);
+    }
+
+    restoreConfig();
+  }, [storeRef.current, profiles]);
 
   // ─── Handlers ───────────────────────────────────────────
 
@@ -210,6 +328,7 @@ function App() {
         path: selected,
       });
       setUserdataPath(state.userdata_path);
+      setSteamPath(state.steam_path);
       setSetupStatus("found");
       setSetupError("");
       setScreen("main");
@@ -233,24 +352,27 @@ function App() {
   };
 
   const handleSourceSelect = (profile: Profile) => {
-    // Source must have dota2 data
-    if (!profile.has_dota2) return;
+    // Source must have game data
+    if (profile.game_count === 0) return;
     const key = { id: profile.id, isBackup: profile.is_backup };
     if (
       selectedSource?.id === key.id &&
       selectedSource?.isBackup === key.isBackup
     ) {
       setSelectedSource(null);
-      setSelectedTargets([]); // Clear targets when deselecting source
+      setSelectedTargets([]);
+      setSelectedGames([]);
     } else {
       setSelectedSource(key);
-      setSelectedTargets([]); // Clear targets when selecting new source
+      setSelectedTargets([]);
+      setSelectedGames([]);
     }
+    setSourceFilter(""); // Reset search filter after selecting a profile
   };
 
   const handleTargetToggle = (profile: Profile) => {
-    // Can't select target before selecting a source
-    if (!selectedSource) return;
+    // Can't select target before selecting a source and games
+    if (!selectedSource || selectedGames.length === 0) return;
     // Can't select backup as target
     if (profile.is_backup) return;
     // Can't select the same profile as source (unless it's a backup source)
@@ -266,10 +388,16 @@ function App() {
         ? prev.filter((id) => id !== profile.id)
         : [...prev, profile.id],
     );
+    setTargetFilter(""); // Reset search filter after selecting a profile
   };
 
   const handleSwap = async () => {
-    if (!selectedSource || selectedTargets.length === 0) return;
+    if (
+      !selectedSource ||
+      selectedTargets.length === 0 ||
+      selectedGames.length === 0
+    )
+      return;
     setSwapping(true);
     try {
       const result = await invoke<SwapResult>("execute_swap", {
@@ -277,8 +405,21 @@ function App() {
         sourceId: selectedSource.id,
         sourceIsBackup: selectedSource.isBackup,
         targetIds: selectedTargets,
+        gameIds: selectedGames,
       });
       setSwapResult(result);
+
+      // Save last configuration on successful swap
+      if (result.success && storeRef.current) {
+        const config: SwapConfiguration = {
+          source: selectedSource,
+          games: selectedGames,
+          targets: selectedTargets,
+        };
+        await storeRef.current.set("swapConfiguration", config);
+        await storeRef.current.save();
+      }
+
       // Refresh profiles after swap
       await loadProfiles(false);
     } catch (e) {
@@ -292,6 +433,7 @@ function App() {
     setSwapResult(null);
     setSelectedSource(null);
     setSelectedTargets([]);
+    setSelectedGames([]);
     setSummary(null);
   };
 
@@ -305,8 +447,33 @@ function App() {
 
   // ─── Derived data ──────────────────────────────────────
 
-  const sourceProfiles = profiles.filter((p) => p.has_dota2);
+  const sourceProfiles = profiles.filter((p) => p.game_count > 0);
   const targetProfiles = profiles.filter((p) => !p.is_backup);
+    // Filter profiles by search term (case-insensitive)
+  const filteredSourceProfiles = sourceProfiles.filter((profile) =>
+    profile.name.toLowerCase().includes(sourceFilter.toLowerCase()) ||
+    profile.id.includes(sourceFilter)
+  );
+  
+  const filteredTargetProfiles = targetProfiles.filter((profile) =>
+    profile.name.toLowerCase().includes(targetFilter.toLowerCase()) ||
+    profile.id.includes(targetFilter)
+  );
+    // Filter games by search term (case-insensitive)
+  const filteredGames = games.filter((game) =>
+    game.name.toLowerCase().includes(gameFilter.toLowerCase()) ||
+    game.id.includes(gameFilter)
+  );
+
+  const handleGameToggle = (gameId: string) => {
+    if (!selectedSource) return;
+    setSelectedGames((prev) =>
+      prev.includes(gameId)
+        ? prev.filter((id) => id !== gameId)
+        : [...prev, gameId],
+    );
+    setGameFilter(""); // Reset search filter after selecting a game
+  };
 
   // ─── Render: Setup ────────────────────────────────────
 
@@ -319,8 +486,8 @@ function App() {
               Nether <span>Swap</span>
             </h2>
             <p>
-              Dota 2 profile configuration manager. Swap your config between
-              Steam accounts effortlessly.
+              Steam game configuration manager. Swap your config between
+              accounts effortlessly.
             </p>
 
             {setupStatus === "searching" && (
@@ -404,37 +571,54 @@ function App() {
         </div>
       </header>
 
-      {/* Dota 2 Running Warning */}
-      {dotaRunning && (
-        <div className="dota-warning">
+      {/* Game Running Warning */}
+      {gamesRunning && (
+        <div className="game-warning">
           <AlertTriangle size={16} />
-          Dota 2 is currently running. Switching profiles while the game is open
-          is not supported.
+          A game process was detected running. Close any games before swapping
+          their configuration.
         </div>
       )}
 
       {/* Main Content */}
       <div className="main-content">
         <div className="description-text">
-          Swap your Dota 2 config between Steam accounts effortlessly
+          Swap your game configuration between Steam accounts effortlessly
         </div>
         <div className="panes-container">
           {/* Source Pane */}
           <div className="pane">
             <div className="pane-header">
-              <span className="pane-title">Source</span>
+              <span className="pane-title">Source Profile</span>
               <span className="pane-badge">
                 {sourceProfiles.length} available
               </span>
             </div>
+            {sourceProfiles.length > 0 && (
+              <div className="pane-search">
+                <Search size={14} />
+                <input
+                  type="text"
+                  placeholder="Search profiles..."
+                  value={sourceFilter}
+                  onChange={(e) => setSourceFilter(e.target.value)}
+                  className="search-input"
+                />
+              </div>
+            )}
             <div className="pane-list">
               {sourceProfiles.length === 0 ? (
                 <div className="empty-state">
                   <Folder size={24} />
-                  <p>No profiles with Dota 2 data found</p>
+                  <p>No profiles with game data found</p>
+                </div>
+              ) : filteredSourceProfiles.length === 0 ? (
+                <div className="empty-state">
+                  <Search size={24} />
+                  <p>No profiles match your search</p>
                 </div>
               ) : (
-                sourceProfiles.map((profile) => {
+                filteredSourceProfiles.map((profile) => {
                   const isSelected =
                     selectedSource?.id === profile.id &&
                     selectedSource?.isBackup === profile.is_backup;
@@ -454,17 +638,73 @@ function App() {
                       <div className="profile-info">
                         <div className="profile-name">{profile.name}</div>
                         <div className="profile-meta">
-                          <span className="profile-tag">
-                            <span className="dot green" />
-                            Dota 2
-                          </span>
-                          {profile.is_backup && (
-                            <span className="profile-tag">
-                              <span className="dot orange" />
-                              Backup
-                            </span>
-                          )}
+                          <span className="text-muted">{profile.last_login}</span>
+                          <span className="text-muted">•</span>
                           <span className="text-muted">ID: {profile.id}</span>
+                        </div>
+                      </div>
+                      <div className="check-indicator">
+                        <Check size={12} color="#fff" />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Games Pane */}
+          <div className="pane">
+            <div className="pane-header">
+              <span className="pane-title">Games to Copy</span>
+              <span className="pane-badge">
+                {selectedGames.length} selected
+              </span>
+            </div>
+            {selectedSource && games.length > 0 && (
+              <div className="pane-search">
+                <Search size={14} />
+                <input
+                  type="text"
+                  placeholder="Search games..."
+                  value={gameFilter}
+                  onChange={(e) => setGameFilter(e.target.value)}
+                  className="search-input"
+                />
+              </div>
+            )}
+            <div className="pane-list">
+              {!selectedSource ? (
+                <div className="empty-state">
+                  <Folder size={24} />
+                  <p>Select a source profile first</p>
+                </div>
+              ) : games.length === 0 ? (
+                <div className="empty-state">
+                  <Folder size={24} />
+                  <p>No games found for this profile</p>
+                </div>
+              ) : filteredGames.length === 0 ? (
+                <div className="empty-state">
+                  <Search size={24} />
+                  <p>No games match your search</p>
+                </div>
+              ) : (
+                filteredGames.map((game) => {
+                  const isSelected = selectedGames.includes(game.id);
+                  return (
+                    <div
+                      key={`game-${game.id}`}
+                      className={`profile-card ${isSelected ? "selected" : ""}`}
+                      onClick={() => handleGameToggle(game.id)}
+                    >
+                      <div className="profile-avatar">
+                        {game.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="profile-info">
+                        <div className="profile-name">{game.name}</div>
+                        <div className="profile-meta">
+                          <span className="text-muted">ID: {game.id}</span>
                         </div>
                       </div>
                       <div className="check-indicator">
@@ -485,24 +725,44 @@ function App() {
           {/* Target Pane */}
           <div className="pane">
             <div className="pane-header">
-              <span className="pane-title">Targets</span>
+              <span className="pane-title">Target Profiles</span>
               <span className="pane-badge">
                 {selectedTargets.length} selected
               </span>
             </div>
+            {targetProfiles.length > 0 && (
+              <div className="pane-search">
+                <Search size={14} />
+                <input
+                  type="text"
+                  placeholder="Search profiles..."
+                  value={targetFilter}
+                  onChange={(e) => setTargetFilter(e.target.value)}
+                  className="search-input"
+                />
+              </div>
+            )}
             <div className="pane-list">
               {targetProfiles.length === 0 ? (
                 <div className="empty-state">
                   <Folder size={24} />
                   <p>No target profiles found</p>
                 </div>
+              ) : filteredTargetProfiles.length === 0 ? (
+                <div className="empty-state">
+                  <Search size={24} />
+                  <p>No profiles match your search</p>
+                </div>
               ) : (
-                targetProfiles.map((profile) => {
+                filteredTargetProfiles.map((profile) => {
                   const isSelected = selectedTargets.includes(profile.id);
                   const isSameAsSource =
                     !selectedSource?.isBackup &&
                     selectedSource?.id === profile.id;
-                  const isDisabled = !selectedSource || isSameAsSource;
+                  const isDisabled =
+                    !selectedSource ||
+                    selectedGames.length === 0 ||
+                    isSameAsSource;
                   return (
                     <div
                       key={`target-${profile.id}`}
@@ -515,17 +775,8 @@ function App() {
                       <div className="profile-info">
                         <div className="profile-name">{profile.name}</div>
                         <div className="profile-meta">
-                          {profile.has_dota2 ? (
-                            <span className="profile-tag">
-                              <span className="dot green" />
-                              Dota 2
-                            </span>
-                          ) : (
-                            <span className="profile-tag">
-                              <span className="dot red" />
-                              No Dota 2
-                            </span>
-                          )}
+                          <span className="text-muted">{profile.last_login}</span>
+                          <span className="text-muted">•</span>
                           <span className="text-muted">ID: {profile.id}</span>
                         </div>
                       </div>
@@ -606,9 +857,9 @@ function App() {
 
                 <button
                   className="btn btn-primary"
-                  disabled={swapping || dotaRunning}
+                  disabled={swapping || gamesRunning}
                   onClick={handleSwap}
-                  title={dotaRunning ? "Close Dota 2 first" : undefined}
+                  title={gamesRunning ? "Close running games first" : undefined}
                 >
                   {swapping ? (
                     <>
@@ -617,6 +868,8 @@ function App() {
                   ) : (
                     <>
                       <ArrowRightLeft size={14} /> Swap Configuration (
+                      {selectedGames.length} game
+                      {selectedGames.length > 1 ? "s" : ""},{" "}
                       {summary.targets.length} target
                       {summary.targets.length > 1 ? "s" : ""})
                     </>
@@ -649,13 +902,12 @@ function App() {
                 {swapResult.details.map((d, i) => (
                   <div
                     key={i}
-                    className={`result-detail-item ${
-                      d.startsWith("Error:")
-                        ? "error-item"
-                        : d.startsWith("Warning:")
-                          ? "warning-item"
-                          : "success-item"
-                    }`}
+                    className={`result-detail-item ${d.startsWith("Error:")
+                      ? "error-item"
+                      : d.startsWith("Warning:")
+                        ? "warning-item"
+                        : "success-item"
+                      }`}
                   >
                     {d}
                   </div>

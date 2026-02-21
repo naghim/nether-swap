@@ -172,8 +172,8 @@ body {
   animation: rotateIcon 200ms ease;
 }
 
-/* ─── Dota Warning ─────────────────────────────────────────── */
-.dota-warning {
+/* ─── Game Warning ───────────────────────────────────────── */
+.game-warning {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -209,7 +209,7 @@ body {
   padding-bottom: 4px;
 }
 
-/* ─── Two-pane Layout ──────────────────────────────────────── */
+/* ─── Three-pane Layout ────────────────────────────────────── */
 .panes-container {
   display: flex;
   gap: 16px;
@@ -259,6 +259,30 @@ body {
   background: var(--bg-input);
   padding: 2px 8px;
   border-radius: 10px;
+}
+
+.pane-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+}
+
+.search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.search-input::placeholder {
+  color: var(--text-muted);
 }
 
 .pane-list {
