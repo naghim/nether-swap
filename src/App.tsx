@@ -221,7 +221,6 @@ function App() {
           isBackup: selectedSource.isBackup,
         });
 
-
         if (isMounted) {
           setGames(g);
         }
@@ -230,14 +229,12 @@ function App() {
           setGames([]);
         }
       }
-  })();
+    })();
 
-  return () => {
-    isMounted = false;
-  };
-}, [selectedSource, steamPath, userdataPath]);
-
-
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedSource, steamPath, userdataPath]);
 
   // Load summary when selection changes
   useEffect(() => {
@@ -252,6 +249,7 @@ function App() {
 
     let cancelled = false;
     setLoadingSummary(true);
+    setSummary(null);
 
     (async () => {
       try {
@@ -271,9 +269,7 @@ function App() {
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [selectedSource, selectedTargets, selectedGames, userdataPath, steamPath]);
 
   useEffect(() => {
