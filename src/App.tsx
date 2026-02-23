@@ -167,7 +167,7 @@ function App() {
   useEffect(() => {
     if (screen !== "main") return;
 
-    // 1. Run immediately so you don't have to wait 5 seconds for the first result
+    // Run immediately so you don't have to wait 5 seconds for the first result
     checkGamesStatus();
 
     const interval = setInterval(checkGamesStatus, gameCheckInterval);
