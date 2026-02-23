@@ -333,8 +333,11 @@ function App() {
       setScreen("main");
 
       if (wasOnMainScreen) {
-        setToast("Steam path updated");
-        setTimeout(() => setToast(null), 2000);
+        const msg = "Steam path updated";
+        setToast(msg);
+        setTimeout(() => {
+          setToast(current => current === msg ? null : current);
+        }, 2000);
       }
     } catch (e) {
       setSetupError(String(e));
