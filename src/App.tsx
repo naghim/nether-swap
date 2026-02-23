@@ -161,7 +161,7 @@ function App() {
     } catch (err) {
       console.error("Error during verification:", err);
     }
-  }, [steamPath, selectedGames]); // Csak akkor változik, ha ezek változnak
+  }, [steamPath, selectedGames]);
 
   // Game process check
   useEffect(() => {
