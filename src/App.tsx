@@ -117,8 +117,8 @@ function App() {
   const [gameFilter, setGameFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
   const [targetFilter, setTargetFilter] = useState("");
-  const gameCheckRef = useRef<ReturnType<typeof setInterval>>();
   const storeRef = useRef<Store | null>(null);
+  const gameCheckInterval = 5000;
 
   // Initialize store
   useEffect(() => {
@@ -150,24 +150,30 @@ function App() {
     })();
   }, []);
 
+  // Helper function for check so that we don't have to define it again and again inside useEffect
+  const checkGamesStatus = useCallback(async () => {
+    try {
+      const running = await invoke<boolean>("check_games_running", {
+        steamPath,
+        gameIds: selectedGames,
+      });
+      setGamesRunning(running);
+    } catch (err) {
+      console.error("Error during verification:", err);
+    }
+  }, [steamPath, selectedGames]); // Csak akkor változik, ha ezek változnak
+
   // Game process check
   useEffect(() => {
     if (screen !== "main") return;
-    const check = async () => {
-      try {
-        const running = await invoke<boolean>("check_games_running", {
-          steamPath,
-          gameIds: selectedGames,
-        });
-        setGamesRunning(running);
-      } catch {
-        /* ignore */
-      }
-    };
-    check();
-    gameCheckRef.current = setInterval(check, 5000);
-    return () => clearInterval(gameCheckRef.current);
-  }, [screen, steamPath, selectedGames]);
+
+    // 1. Run immediately so you don't have to wait 5 seconds for the first result
+    checkGamesStatus();
+
+    const interval = setInterval(checkGamesStatus, gameCheckInterval);
+
+    return () => clearInterval(interval);
+  }, [screen, checkGamesStatus]);
 
   // Load profiles when entering main screen
   const loadProfiles = useCallback(
