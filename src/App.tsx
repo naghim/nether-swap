@@ -167,7 +167,7 @@ function App() {
   useEffect(() => {
     if (screen !== "main") return;
 
-    // Run immediately so you don't have to wait 5 seconds for the first result
+    // 1. Run immediately so you don't have to wait 5 seconds for the first result
     checkGamesStatus();
 
     const interval = setInterval(checkGamesStatus, gameCheckInterval);
@@ -203,11 +203,14 @@ function App() {
 
   // Load games when source changes
   useEffect(() => {
+    setGames([]);
+    setSelectedGames([]);
+
     if (!selectedSource || !steamPath || !userdataPath) {
-      setGames([]);
-      setSelectedGames([]);
       return;
     }
+
+    let isMounted = true;
 
     (async () => {
       try {
@@ -217,12 +220,24 @@ function App() {
           profileId: selectedSource.id,
           isBackup: selectedSource.isBackup,
         });
-        setGames(g);
-      } catch {
-        setGames([]);
+
+
+        if (isMounted) {
+          setGames(g);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setGames([]);
+        }
       }
-    })();
-  }, [selectedSource, steamPath, userdataPath]);
+  })();
+
+  return () => {
+    isMounted = false;
+  };
+}, [selectedSource, steamPath, userdataPath]);
+
+
 
   // Load summary when selection changes
   useEffect(() => {
