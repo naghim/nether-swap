@@ -274,59 +274,41 @@ function App() {
 
   useEffect(() => {
     async function restoreConfig() {
-      if (!storeRef.current) return;
-      if (profiles.length === 0) return; // Wait until profiles are loaded
-      if (loadedConfig) return; // Only attempt to load config once
+      if (!storeRef.current || profiles.length === 0 || loadedConfig) return;
+
       const config = await storeRef.current.get<SwapConfiguration>("swapConfiguration");
+      if (!config) {
+        setLoadedConfig(true);
+        return;
+      }
 
       console.log("Restoring config:", config);
 
-      // Restore source if it exists
-      if (!config?.source) {
-        return;
+      if (config.source) {
+        const sourceExists = profiles.some(
+          (p) => p.id === config.source!.id && p.is_backup === config.source!.isBackup
+        );
+        if (sourceExists) {
+          setSelectedSource(config.source);
+          
+          if (config.games && config.games.length > 0) {
+            setSelectedGames(config.games); 
+          }
+        }
       }
-      const sourceExists = profiles.some(
-        (p) => p.id === config.source.id && p.is_backup === config.source.isBackup
-      );
-      if (sourceExists) {
-        setSelectedSource(config.source);
 
-        // Wait for games to load, then restore game selection
-        if (config.games && config.games.length > 0) {
-          try {
-            const availableGames = await invoke<GameInfo[]>("get_games_for_profile", {
-              steamPath,
-              userdataPath,
-              profileId: config.source.id,
-              isBackup: config.source.isBackup,
-            });
-            const gameIds = availableGames.map((g) => g.id);
-            const validGames = config.games.filter((gid) => gameIds.includes(gid));
-            if (validGames.length > 0) {
-              setSelectedGames(validGames);
-            }
-          } catch {
-            /* ignore */
-          }
-        }
-
-        // Restore targets if they exist
-        if (config.targets && config.targets.length > 0) {
-          const validTargets = config.targets.filter((tid) =>
-            profiles.some((p) => p.id === tid && !p.is_backup)
-          );
-          if (validTargets.length > 0) {
-            setSelectedTargets(validTargets);
-          }
-        }
-
+      if (config.targets && config.targets.length > 0) {
+        const validTargets = config.targets.filter((tid) =>
+          profiles.some((p) => p.id === tid && !p.is_backup)
+        );
+        setSelectedTargets(validTargets);
       }
 
       setLoadedConfig(true);
     }
 
     restoreConfig();
-  }, [storeRef.current, profiles]);
+  }, [profiles, loadedConfig, steamPath, userdataPath]); 
 
   // ─── Handlers ───────────────────────────────────────────
 
