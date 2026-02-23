@@ -117,8 +117,8 @@ function App() {
   const [gameFilter, setGameFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
   const [targetFilter, setTargetFilter] = useState("");
-  const gameCheckRef = useRef<ReturnType<typeof setInterval>>();
   const storeRef = useRef<Store | null>(null);
+  const gameCheckInterval = 5000;
 
   // Initialize store
   useEffect(() => {
@@ -150,24 +150,30 @@ function App() {
     })();
   }, []);
 
+  // Helper function for check so that we don't have to define it again and again inside useEffect
+  const checkGamesStatus = useCallback(async () => {
+    try {
+      const running = await invoke<boolean>("check_games_running", {
+        steamPath,
+        gameIds: selectedGames,
+      });
+      setGamesRunning(running);
+    } catch (err) {
+      console.error("Error during verification:", err);
+    }
+  }, [steamPath, selectedGames]);
+
   // Game process check
   useEffect(() => {
     if (screen !== "main") return;
-    const check = async () => {
-      try {
-        const running = await invoke<boolean>("check_games_running", {
-          steamPath,
-          gameIds: selectedGames,
-        });
-        setGamesRunning(running);
-      } catch {
-        /* ignore */
-      }
-    };
-    check();
-    gameCheckRef.current = setInterval(check, 5000);
-    return () => clearInterval(gameCheckRef.current);
-  }, [screen, steamPath, selectedGames]);
+
+    // 1. Run immediately so you don't have to wait 5 seconds for the first result
+    checkGamesStatus();
+
+    const interval = setInterval(checkGamesStatus, gameCheckInterval);
+
+    return () => clearInterval(interval);
+  }, [screen, checkGamesStatus]);
 
   // Load profiles when entering main screen
   const loadProfiles = useCallback(
@@ -197,11 +203,14 @@ function App() {
 
   // Load games when source changes
   useEffect(() => {
+    setGames([]);
+    setSelectedGames([]);
+
     if (!selectedSource || !steamPath || !userdataPath) {
-      setGames([]);
-      setSelectedGames([]);
       return;
     }
+
+    let isMounted = true;
 
     (async () => {
       try {
@@ -211,11 +220,20 @@ function App() {
           profileId: selectedSource.id,
           isBackup: selectedSource.isBackup,
         });
-        setGames(g);
-      } catch {
-        setGames([]);
+
+        if (isMounted) {
+          setGames(g);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setGames([]);
+        }
       }
     })();
+
+    return () => {
+      isMounted = false;
+    };
   }, [selectedSource, steamPath, userdataPath]);
 
   // Load summary when selection changes
@@ -231,6 +249,7 @@ function App() {
 
     let cancelled = false;
     setLoadingSummary(true);
+    setSummary(null);
 
     (async () => {
       try {
@@ -250,66 +269,46 @@ function App() {
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [selectedSource, selectedTargets, selectedGames, userdataPath, steamPath]);
 
   useEffect(() => {
     async function restoreConfig() {
-      if (!storeRef.current) return;
-      if (profiles.length === 0) return; // Wait until profiles are loaded
-      if (loadedConfig) return; // Only attempt to load config once
+      if (!storeRef.current || profiles.length === 0 || loadedConfig) return;
+
       const config = await storeRef.current.get<SwapConfiguration>("swapConfiguration");
+      if (!config) {
+        setLoadedConfig(true);
+        return;
+      }
 
       console.log("Restoring config:", config);
 
-      // Restore source if it exists
-      if (!config?.source) {
-        return;
+      if (config.source) {
+        const sourceExists = profiles.some(
+          (p) => p.id === config.source!.id && p.is_backup === config.source!.isBackup
+        );
+        if (sourceExists) {
+          setSelectedSource(config.source);
+          
+          if (config.games && config.games.length > 0) {
+            setSelectedGames(config.games); 
+          }
+        }
       }
-      const sourceExists = profiles.some(
-        (p) => p.id === config.source.id && p.is_backup === config.source.isBackup
-      );
-      if (sourceExists) {
-        setSelectedSource(config.source);
 
-        // Wait for games to load, then restore game selection
-        if (config.games && config.games.length > 0) {
-          try {
-            const availableGames = await invoke<GameInfo[]>("get_games_for_profile", {
-              steamPath,
-              userdataPath,
-              profileId: config.source.id,
-              isBackup: config.source.isBackup,
-            });
-            const gameIds = availableGames.map((g) => g.id);
-            const validGames = config.games.filter((gid) => gameIds.includes(gid));
-            if (validGames.length > 0) {
-              setSelectedGames(validGames);
-            }
-          } catch {
-            /* ignore */
-          }
-        }
-
-        // Restore targets if they exist
-        if (config.targets && config.targets.length > 0) {
-          const validTargets = config.targets.filter((tid) =>
-            profiles.some((p) => p.id === tid && !p.is_backup)
-          );
-          if (validTargets.length > 0) {
-            setSelectedTargets(validTargets);
-          }
-        }
-
+      if (config.targets && config.targets.length > 0) {
+        const validTargets = config.targets.filter((tid) =>
+          profiles.some((p) => p.id === tid && !p.is_backup)
+        );
+        setSelectedTargets(validTargets);
       }
 
       setLoadedConfig(true);
     }
 
     restoreConfig();
-  }, [storeRef.current, profiles]);
+  }, [profiles, loadedConfig, steamPath, userdataPath]); 
 
   // ─── Handlers ───────────────────────────────────────────
 
@@ -334,8 +333,11 @@ function App() {
       setScreen("main");
 
       if (wasOnMainScreen) {
-        setToast("Steam path updated");
-        setTimeout(() => setToast(null), 2000);
+        const msg = "Steam path updated";
+        setToast(msg);
+        setTimeout(() => {
+          setToast(current => current === msg ? null : current);
+        }, 2000);
       }
     } catch (e) {
       setSetupError(String(e));
