@@ -117,7 +117,7 @@ function App() {
   const [gameFilter, setGameFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
   const [targetFilter, setTargetFilter] = useState("");
-  const gameCheckRef = useRef<ReturnType<typeof setInterval>>();
+  const gameCheckRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const storeRef = useRef<Store | null>(null);
 
   // Initialize store
